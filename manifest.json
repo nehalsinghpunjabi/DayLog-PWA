@@ -2,7 +2,7 @@
   "name": "DayLog",
   "short_name": "DayLog",
   "description": "iPhone-first daily log with cloud sync, infinite history, and global search.",
-  "start_url": "./index.html",
+  "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
