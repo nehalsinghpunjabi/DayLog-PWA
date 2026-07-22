@@ -5,13 +5,14 @@
 // Supabase secrets and are never exposed to the client:
 //
 //   OCR_SPACE_API_KEY   — OCR.Space (primary OCR)
-//   GROK_API_KEY        — xAI Grok (structuring, only when needed)
+//   GROQ_API_KEY        — Groq (groq.com) LLM structuring, only when needed
+//   GROQ_MODEL          — optional; overrides the default Groq model
 //
 // Flow:
 //   image -> OCR.Space -> raw text
 //         -> deterministic extraction (email / phone / website + heuristics)
 //         -> confidence score
-//         -> if low confidence AND Grok available: Grok structuring
+//         -> if low confidence AND Groq available: Groq structuring
 //         -> validated JSON { name, company, job_title, phone, email,
 //                             website, address, confidence, source, raw_text }
 //
@@ -102,7 +103,7 @@ function deterministicExtract(text: string): Extracted {
 
   // Confidence is driven by the deterministic contact points. If we confidently
   // have both an email and a phone, deterministic + heuristics are trusted and
-  // Grok is skipped to reduce API usage.
+  // Groq is skipped to reduce API usage.
   let confidence = 0;
   if (email) confidence += 0.45;
   if (phone) confidence += 0.30;
@@ -119,12 +120,12 @@ function deterministicExtract(text: string): Extracted {
   };
 }
 
-// --- Grok structuring ------------------------------------------------------
+// --- Groq structuring ------------------------------------------------------
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-// Validate + coerce an arbitrary Grok response into the strict schema.
+// Validate + coerce an arbitrary Groq response into the strict schema.
 function validateContact(raw: unknown): typeof EMPTY_CONTACT | null {
   if (!isPlainObject(raw)) return null;
   const out = { ...EMPTY_CONTACT };
@@ -137,9 +138,17 @@ function validateContact(raw: unknown): typeof EMPTY_CONTACT | null {
   return out;
 }
 
-async function grokStructure(text: string): Promise<typeof EMPTY_CONTACT | null> {
-  const key = Deno.env.get("GROK_API_KEY");
-  if (!key) return null;
+// Groq (groq.com) — OpenAI-compatible chat completions. Model is configurable
+// via GROQ_MODEL and defaults to a currently supported production model.
+const DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile";
+
+async function groqStructure(text: string): Promise<typeof EMPTY_CONTACT | null> {
+  const key = Deno.env.get("GROQ_API_KEY");
+  if (!key) {
+    console.warn("[business-card-process] GROQ_API_KEY not set — skipping AI structuring.");
+    return null;
+  }
+  const model = Deno.env.get("GROQ_MODEL") || DEFAULT_GROQ_MODEL;
 
   const system =
     "You extract contact details from raw OCR text of a business card. " +
@@ -148,28 +157,34 @@ async function grokStructure(text: string): Promise<typeof EMPTY_CONTACT | null>
     '"email":"","website":"","address":""}. Use empty strings for unknown ' +
     "fields. Pick the single best phone and email.";
 
-  const resp = await fetch("https://api.x.ai/v1/chat/completions", {
+  const requestBody = {
+    model,
+    temperature: 0,
+    response_format: { type: "json_object" },
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: text.slice(0, 4000) },
+    ],
+  };
+
+  console.info("[business-card-process] Groq model:", model);
+  console.info("[business-card-process] Groq request payload:", JSON.stringify(requestBody));
+
+  const resp = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${key}`,
     },
-    body: JSON.stringify({
-      model: "grok-2-latest",
-      temperature: 0,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: text.slice(0, 4000) },
-      ],
-    }),
+    body: JSON.stringify(requestBody),
   });
 
   if (!resp.ok) {
-    console.error("Grok error", resp.status, await resp.text());
+    console.error("[business-card-process] Groq error", resp.status, await resp.text());
     return null;
   }
   const data = await resp.json();
+  console.info("[business-card-process] Groq response payload:", JSON.stringify(data));
   const content: string = data?.choices?.[0]?.message?.content ?? "";
   if (!content) return null;
 
@@ -208,27 +223,27 @@ serve(async (request) => {
     // 2. Deterministic extraction + confidence.
     const det = deterministicExtract(text);
 
-    // 3. Low confidence -> Grok structuring (if available). Merge, preferring
-    //    Grok for descriptive fields but keeping deterministic contact points
-    //    when Grok omits them.
+    // 3. Low confidence -> Groq structuring (if available). Merge, preferring
+    //    Groq for descriptive fields but keeping deterministic contact points
+    //    when Groq omits them.
     let contact = det.contact;
     let source = `${ocrSource}+deterministic`;
     let confidence = det.confidence;
 
     const HIGH = 0.75;
     if (det.confidence < HIGH) {
-      const grok = await grokStructure(text);
-      if (grok) {
+      const groq = await groqStructure(text);
+      if (groq) {
         contact = {
-          name: grok.name || det.contact.name,
-          company: grok.company || det.contact.company,
-          job_title: grok.job_title || det.contact.job_title,
-          phone: grok.phone || det.contact.phone,
-          email: grok.email || det.contact.email,
-          website: grok.website || det.contact.website,
-          address: grok.address || det.contact.address,
+          name: groq.name || det.contact.name,
+          company: groq.company || det.contact.company,
+          job_title: groq.job_title || det.contact.job_title,
+          phone: groq.phone || det.contact.phone,
+          email: groq.email || det.contact.email,
+          website: groq.website || det.contact.website,
+          address: groq.address || det.contact.address,
         };
-        source = `${ocrSource}+grok`;
+        source = `${ocrSource}+groq`;
         confidence = Math.max(det.confidence, 0.8);
       }
     }

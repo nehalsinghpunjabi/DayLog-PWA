@@ -92,10 +92,10 @@ local copy still exists and DayLog is never the sole owner of the image.
 
 Card scanning runs in the `business-card-process` Edge Function so no API keys
 reach the browser: image → OCR.Space → deterministic extraction + confidence →
-Grok structuring only when confidence is low → validated JSON. The client
+Groq structuring only when confidence is low → validated JSON. The client
 ([js/ocr/extract.js](../js/ocr/extract.js)) calls the function and falls back to
 in-browser Tesseract only when offline. Keys (`OCR_SPACE_API_KEY`,
-`GROK_API_KEY`) live in Supabase secrets. See [OCR.md](OCR.md).
+`GROQ_API_KEY`) live in Supabase secrets. See [OCR.md](OCR.md).
 
 ## Offline & PWA
 

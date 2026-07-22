@@ -54,7 +54,7 @@ daylog-pwa-rebuild/
 ├── icons/                     App icons (SVG + generated PNGs)
 ├── supabase/
 │   ├── migrations/            0001 schema · 0002 RLS · 0003 search · 0004 storage
-│   ├── functions/business-card-process/  OCR.Space + Grok (keys server-side only)
+│   ├── functions/business-card-process/  OCR.Space + Groq (keys server-side only)
 │   ├── schema.sql             Consolidated schema (psql \i)
 │   ├── policies.sql           All RLS + storage policies (standalone)
 │   └── config.toml            Supabase CLI config
@@ -187,16 +187,19 @@ Set on the Supabase project for business-card scanning:
 | Secret | Required | Purpose |
 |---|---|---|
 | `OCR_SPACE_API_KEY` | for scanning | OCR.Space image OCR |
-| `GROK_API_KEY` | optional | xAI Grok contact structuring (low-confidence cases) |
+| `GROQ_API_KEY` | optional | Groq (groq.com) contact structuring (low-confidence cases) |
+| `GROQ_MODEL` | optional | Override the Groq model (default `llama-3.3-70b-versatile`) |
 
 ```bash
-supabase secrets set OCR_SPACE_API_KEY=... GROK_API_KEY=...
+supabase secrets set OCR_SPACE_API_KEY=... GROQ_API_KEY=...
+# optional: pin a specific Groq model
+supabase secrets set GROQ_MODEL=llama-3.3-70b-versatile
 supabase functions deploy business-card-process
 ```
 
 These live only in Supabase secrets and are used inside the
 `business-card-process` Edge Function. The browser never sees them — it calls the
-function, which calls OCR.Space and Grok on the server.
+function, which calls OCR.Space and Groq (groq.com) on the server.
 
 ---
 

@@ -1,7 +1,7 @@
 // DayLog 2.0 — business-card extraction entry point (client side).
 //
 // PRIMARY path: send the image to the `business-card-process` Edge Function,
-// which runs OCR.Space + deterministic extraction + Grok (server-side, keys
+// which runs OCR.Space + deterministic extraction + Groq (server-side, keys
 // never exposed) and returns a structured contact.
 //
 // FALLBACK path: if the Edge Function is unreachable (offline / network error),

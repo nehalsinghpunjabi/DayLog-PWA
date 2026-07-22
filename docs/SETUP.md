@@ -59,11 +59,14 @@ function and set its secrets:
 ```bash
 supabase functions deploy business-card-process
 supabase secrets set OCR_SPACE_API_KEY=your_ocrspace_key
-supabase secrets set GROK_API_KEY=your_grok_key   # optional (AI structuring)
+supabase secrets set GROQ_API_KEY=your_groq_key         # optional (AI structuring)
+supabase secrets set GROQ_MODEL=llama-3.3-70b-versatile # optional (model override)
 ```
 
 - `OCR_SPACE_API_KEY` — required for image OCR.
-- `GROK_API_KEY` — optional; without it the deterministic extraction is returned.
+- `GROQ_API_KEY` — optional; without it the deterministic extraction is returned.
+- `GROQ_MODEL` — optional; defaults to `llama-3.3-70b-versatile`. Set it to any
+  currently supported Groq model (see https://console.groq.com/docs/models).
 
 If the function is not deployed, scanning falls back to in-browser Tesseract.
 See [OCR.md](OCR.md) for the full pipeline.

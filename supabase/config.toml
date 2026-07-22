@@ -2,8 +2,9 @@
 # `supabase link` fills in project_id for your own project.
 project_id = "daylog"
 
-# Business-card OCR + Grok extraction. Requires OCR_SPACE_API_KEY and
-# (optionally) GROK_API_KEY set via `supabase secrets set`. JWT-verified so only
-# authenticated users can call it.
+# Business-card OCR + Groq extraction. Secrets via `supabase secrets set`:
+#   OCR_SPACE_API_KEY (required), GROQ_API_KEY (optional),
+#   GROQ_MODEL (optional, default llama-3.3-70b-versatile).
+# JWT-verified so only authenticated users can call it.
 [functions.business-card-process]
 verify_jwt = true

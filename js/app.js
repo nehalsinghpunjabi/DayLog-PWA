@@ -434,7 +434,7 @@ function onSearchInput(value) {
 // Business-card scan flow
 // ---------------------------------------------------------------------------
 // Business-card scan pipeline with explicit UX states:
-// photo -> upload backup -> Edge Function (OCR.Space + Grok) -> review.
+// photo -> upload backup -> Edge Function (OCR.Space + Groq) -> review.
 // Shows a scanning modal with Cancel, and a scan-error modal with Retry/Cancel.
 async function startScan(file) {
   console.info("[DayLog scan] start", { name: file?.name, size: file?.size, type: file?.type });

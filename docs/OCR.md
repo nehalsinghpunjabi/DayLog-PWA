@@ -7,10 +7,10 @@ reach the browser. The frontend only ever talks to Supabase.
 iPhone PWA
    │  (image bytes, base64)
    ▼
-Supabase Edge Function  business-card-process   ← OCR_SPACE_API_KEY, GROK_API_KEY
+Supabase Edge Function  business-card-process   ← OCR_SPACE_API_KEY, GROQ_API_KEY
    │  1. OCR.Space        → raw text
    │  2. deterministic    → email / phone / website + heuristics + confidence
-   │  3. if low confidence → Grok structuring (validated JSON)
+   │  3. if low confidence → Groq structuring (validated JSON)
    ▼
 Structured contact JSON
    │
@@ -24,13 +24,21 @@ Set on the Supabase project — never committed, never sent to the client:
 
 ```bash
 supabase secrets set OCR_SPACE_API_KEY=your_ocrspace_key
-supabase secrets set GROK_API_KEY=your_grok_key   # optional but recommended
+supabase secrets set GROQ_API_KEY=your_groq_key         # optional but recommended
+supabase secrets set GROQ_MODEL=llama-3.3-70b-versatile # optional model override
 supabase functions deploy business-card-process
 ```
 
 - `OCR_SPACE_API_KEY` — required for image OCR.
-- `GROK_API_KEY` — optional. If absent, the function still returns the
+- `GROQ_API_KEY` — optional. If absent, the function still returns the
   deterministic result; only the AI structuring step is skipped.
+- `GROQ_MODEL` — optional; defaults to `llama-3.3-70b-versatile`. Any currently
+  supported Groq model works (see https://console.groq.com/docs/models).
+
+Groq is called via its OpenAI-compatible endpoint
+`https://api.groq.com/openai/v1/chat/completions` using JSON mode
+(`response_format: { type: "json_object" }`). The selected model, request
+payload, and response payload are logged to the Edge Function logs.
 
 The Edge Function is `verify_jwt = true`, so only authenticated DayLog users can
 invoke it.
@@ -47,7 +55,7 @@ invoke it.
   "website": "",
   "address": "",
   "confidence": 0,
-  "source": "ocrspace+deterministic | ocrspace+grok | tesseract-local",
+  "source": "ocrspace+deterministic | ocrspace+groq | tesseract-local",
   "raw_text": ""
 }
 ```
@@ -63,10 +71,10 @@ points were found:
 
 - email +0.45, phone +0.30, website +0.15, name +0.10.
 
-If confidence ≥ **0.75**, Grok is **not** called — the deterministic result is
-returned, minimising API usage. Below the threshold, Grok structures the raw
-text and its fields are merged (deterministic contact points win when Grok
-leaves them blank). Malformed Grok output is rejected by `validateContact()` and
+If confidence ≥ **0.75**, Groq is **not** called — the deterministic result is
+returned, minimising API usage. Below the threshold, Groq structures the raw
+text and its fields are merged (deterministic contact points win when Groq
+leaves them blank). Malformed Groq output is rejected by `validateContact()` and
 the function falls back to the deterministic contact.
 
 ## Fallback (offline)
@@ -74,7 +82,7 @@ the function falls back to the deterministic contact.
 If the Edge Function is unreachable, the client ([js/ocr/extract.js](../js/ocr/extract.js)):
 
 1. Runs **Tesseract.js** locally to get text.
-2. Retries the Edge Function with that text (`ocr_text`) so Grok can still
+2. Retries the Edge Function with that text (`ocr_text`) so Groq can still
    structure it if connectivity returns.
 3. If still offline, parses locally with heuristics
    ([js/ocr/parse-card.js](../js/ocr/parse-card.js)) and marks
@@ -97,6 +105,6 @@ The scan flow ([js/app.js](../js/app.js) `startScan`) surfaces explicit states:
 
 - **Different OCR vendor:** change `ocrSpace()` in the Edge Function (or add a
   branch). The client contract is unchanged.
-- **Different LLM:** change `grokStructure()`. The strict `validateContact()`
+- **Different LLM:** change `groqStructure()`. The strict `validateContact()`
   gate means any model that returns the JSON schema drops in without touching the
   UI, forms, or data model.
