@@ -10,6 +10,21 @@ create extension if not exists pg_trgm;
 create extension if not exists unaccent;
 
 -- ---------------------------------------------------------------------------
+-- Immutable helper for joining a text[] inside a generated column.
+-- array_to_string() is only STABLE, so Postgres rejects it in a GENERATED
+-- expression ("generation expression is not immutable"). Joining a text array
+-- with a space is genuinely immutable, so we wrap it in an IMMUTABLE function.
+-- ---------------------------------------------------------------------------
+create or replace function public.daylog_array_to_text(arr text[])
+returns text
+language sql
+immutable
+parallel safe
+as $$
+  select coalesce(array_to_string(arr, ' '), '');
+$$;
+
+-- ---------------------------------------------------------------------------
 -- Generated search vectors
 -- ---------------------------------------------------------------------------
 alter table public.day_entries
@@ -33,9 +48,9 @@ alter table public.business_card_contacts
       coalesce(name, '') || ' ' ||
       coalesce(company, '') || ' ' ||
       coalesce(job_title, '') || ' ' ||
-      array_to_string(emails, ' ') || ' ' ||
-      array_to_string(phones, ' ') || ' ' ||
-      array_to_string(office_phones, ' ') || ' ' ||
+      public.daylog_array_to_text(emails) || ' ' ||
+      public.daylog_array_to_text(phones) || ' ' ||
+      public.daylog_array_to_text(office_phones) || ' ' ||
       coalesce(website, '') || ' ' ||
       coalesce(address, ''))
   ) stored;

@@ -50,28 +50,59 @@ create policy reminders_all on public.reminder_metadata
   for all using (user_id = auth.uid()) with check (user_id = auth.uid());
 
 -- === Storage object policies ===============================================
+-- Per-bucket policies (bucket_id = '<name>') so the Supabase dashboard counts
+-- them under each bucket. RLS is enforced identically for both buckets.
+
+-- photos bucket
 drop policy if exists "photos read own" on storage.objects;
 create policy "photos read own" on storage.objects
   for select to authenticated
-  using (bucket_id in ('photos','cards')
+  using (bucket_id = 'photos'
          and (storage.foldername(name))[1] = auth.uid()::text);
 
 drop policy if exists "photos insert own" on storage.objects;
 create policy "photos insert own" on storage.objects
   for insert to authenticated
-  with check (bucket_id in ('photos','cards')
+  with check (bucket_id = 'photos'
               and (storage.foldername(name))[1] = auth.uid()::text);
 
 drop policy if exists "photos update own" on storage.objects;
 create policy "photos update own" on storage.objects
   for update to authenticated
-  using (bucket_id in ('photos','cards')
+  using (bucket_id = 'photos'
          and (storage.foldername(name))[1] = auth.uid()::text)
-  with check (bucket_id in ('photos','cards')
+  with check (bucket_id = 'photos'
               and (storage.foldername(name))[1] = auth.uid()::text);
 
 drop policy if exists "photos delete own" on storage.objects;
 create policy "photos delete own" on storage.objects
   for delete to authenticated
-  using (bucket_id in ('photos','cards')
+  using (bucket_id = 'photos'
+         and (storage.foldername(name))[1] = auth.uid()::text);
+
+-- cards bucket
+drop policy if exists "cards read own" on storage.objects;
+create policy "cards read own" on storage.objects
+  for select to authenticated
+  using (bucket_id = 'cards'
+         and (storage.foldername(name))[1] = auth.uid()::text);
+
+drop policy if exists "cards insert own" on storage.objects;
+create policy "cards insert own" on storage.objects
+  for insert to authenticated
+  with check (bucket_id = 'cards'
+              and (storage.foldername(name))[1] = auth.uid()::text);
+
+drop policy if exists "cards update own" on storage.objects;
+create policy "cards update own" on storage.objects
+  for update to authenticated
+  using (bucket_id = 'cards'
+         and (storage.foldername(name))[1] = auth.uid()::text)
+  with check (bucket_id = 'cards'
+              and (storage.foldername(name))[1] = auth.uid()::text);
+
+drop policy if exists "cards delete own" on storage.objects;
+create policy "cards delete own" on storage.objects
+  for delete to authenticated
+  using (bucket_id = 'cards'
          and (storage.foldername(name))[1] = auth.uid()::text);
