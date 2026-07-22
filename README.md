@@ -109,8 +109,49 @@ python -m http.server 8080
 Open `http://localhost:8080`.
 
 ### 5. Deploy
-Push to GitHub and enable Pages, or use the included Actions workflow. See
+Deploy to **Vercel** (below) or GitHub Pages (included Actions workflow). See
 [docs/SETUP.md](docs/SETUP.md) for the full walkthrough.
+
+---
+
+## Deploy to Vercel
+
+DayLog is a static site with **no server-side rendering**. The browser reads its
+config from `js/config.js`, which is git-ignored and generated at build time from
+your Vercel environment variables — so no keys are ever committed.
+
+1. **Import the repo** into Vercel (New Project → import your Git repository).
+2. Leave the framework preset as **Other**. `vercel.json` already sets:
+   - Build Command: `bash build.sh`
+   - Output Directory: `.` (the repo root is served as static files)
+3. **Add environment variables** (Settings → Environment Variables), for the
+   Production (and Preview) environments:
+   - `SUPABASE_URL` = your project URL
+   - `SUPABASE_ANON_KEY` = your anon public key
+4. **Deploy.** During the build, `build.sh` writes `js/config.js` from those
+   variables; if either is missing the build fails with a clear message.
+
+Environment variables alone are **sufficient** — you do not create `js/config.js`
+by hand for Vercel. `build.sh` produces exactly:
+
+```js
+window.DAYLOG_CONFIG = {
+  SUPABASE_URL: "…",
+  SUPABASE_ANON_KEY: "…"
+};
+```
+
+After deploying, add your Vercel URL to Supabase → Authentication → URL
+Configuration (Site URL + Redirect URLs) so auth redirects work.
+
+### Vercel CLI (optional)
+
+```bash
+npm i -g vercel
+vercel env add SUPABASE_URL production
+vercel env add SUPABASE_ANON_KEY production
+vercel --prod
+```
 
 ---
 
@@ -130,8 +171,11 @@ Screen is the expected iOS install path.
 
 | Variable | Where | Purpose |
 |---|---|---|
-| `SUPABASE_URL` | `js/config.js` (or CI variable) | Project URL |
-| `SUPABASE_ANON_KEY` | `js/config.js` (or CI variable) | Public anon key (safe in the browser; RLS protects data) |
+| `SUPABASE_URL` | `js/config.js` locally · Vercel env var · GitHub Actions variable | Project URL |
+| `SUPABASE_ANON_KEY` | `js/config.js` locally · Vercel env var · GitHub Actions variable | Public anon key (safe in the browser; RLS protects data) |
+
+On Vercel, `build.sh` generates `js/config.js` from the env vars at build time.
+Locally, copy `js/config.example.js` to `js/config.js` and edit it by hand.
 
 No other keys are required for v1. The `service_role` key must **never** be
 placed in client config — it bypasses RLS. Optional server-side OCR vendor keys

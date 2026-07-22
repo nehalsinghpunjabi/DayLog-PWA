@@ -1,0 +1,6 @@
+# Files not needed by the static browser app (kept in git, skipped on deploy).
+supabase/
+docs/
+.github/
+icons/generate_icons.py
+README.md
