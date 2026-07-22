@@ -262,6 +262,10 @@ textarea { min-height: 96px; resize: vertical; line-height: 1.45; }
   .modal { border-radius: 22px; }
 }
 
+/* ---- Scan status ---- */
+.scan-status { display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 18px 0 6px; text-align: center; }
+.scan-status .status { margin: 0; }
+
 /* ---- Fullscreen viewer ---- */
 .viewer {
   position: fixed; inset: 0; z-index: 60; background: #000;

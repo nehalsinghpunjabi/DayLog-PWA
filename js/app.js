@@ -9,8 +9,8 @@ import { storageApi } from "./api/storage.js";
 import { entries, meetings, photos, myCard, contacts, globalSearch } from "./api/db.js";
 import { detectMeeting, formatTime } from "./meetings.js";
 import { buildICS, buildVCard, downloadFile, safeName } from "./exporters.js";
-import { recognizeCard } from "./ocr/provider.js";
-import { parseCard, isDuplicate } from "./ocr/parse-card.js";
+import { processBusinessCard } from "./ocr/extract.js";
+import { isDuplicate } from "./ocr/parse-card.js";
 
 const $ = (s) => document.querySelector(s);
 const app = $("#app");
@@ -39,12 +39,13 @@ const state = {
   flip: false,
   theme: localStorage.getItem("daylog-theme") || "system",
   deferredInstall: null,
-  pendingMeeting: null,
   scanMode: false,
   cardSide: "front",
   cardSourceMode: false,
   photoTarget: null,
   contact: null,
+  scan: { blob: null, status: "idle", message: "" },
+  scanAbort: null,
 };
 
 // ---------------------------------------------------------------------------
@@ -277,12 +278,16 @@ function modal() {
     body = `<h2>Upload ${state.cardSide === "front" ? "Front" : "Back"} Side</h2>
       <div class="stack">${btn("📷 Camera", "camera-card")}${btn("▧ Photo Library", "library-card", "secondary")}</div>`;
   }
-  if (m === "confirm-reminder") {
-    const x = state.pendingMeeting;
-    const t = formatTime(new Date(x.starts_at).toTimeString().slice(0, 5));
-    body = `<h2>Confirm Reminder</h2>
-      <p>Detected:<br>Date: ${esc(new Date(x.starts_at).toISOString().slice(0, 10))}<br>Time: ${esc(t)}</p>
-      <div class="actions">${btn("Edit", "close", "ghost")}${btn("Confirm", "confirm-reminder")}</div>`;
+  if (m === "scanning") {
+    body = `<h2>Scanning card</h2>
+      <div class="scan-status"><i class="spinner big"></i>
+        <p class="status">${esc(state.scan.message || "Processing…")}</p></div>
+      <div class="actions">${btn("Cancel", "cancel-scan", "ghost")}</div>`;
+  }
+  if (m === "scan-error") {
+    body = `<h2>Couldn't read the card</h2>
+      <p class="status">${esc(state.scan.message || "Something went wrong.")}</p>
+      <div class="actions">${btn("Cancel", "cancel-scan", "ghost")}${btn("Retry", "retry-scan")}</div>`;
   }
   if (m === "edit-card") {
     body = `<h2>Edit Card</h2><div class="stack">
@@ -428,26 +433,49 @@ function onSearchInput(value) {
 // ---------------------------------------------------------------------------
 // Business-card scan flow
 // ---------------------------------------------------------------------------
-async function scanFile(file) {
-  state.busy = true; render();
+// Business-card scan pipeline with explicit UX states:
+// photo -> upload backup -> Edge Function (OCR.Space + Grok) -> review.
+// Shows a scanning modal with Cancel, and a scan-error modal with Retry/Cancel.
+async function startScan(file) {
+  state.scan = { blob: file, status: "processing", message: "Reading business card…" };
+  state.scanAbort = new AbortController();
+  state.modal = "scanning";
+  render();
   try {
-    const meta = await storageApi.attachPhoto(file, { backup: true });
-    let text = "";
+    // Keep a backup copy (original stays in Apple Photos); non-fatal on failure.
+    let imagePath = null;
     try {
-      const result = await recognizeCard(file);
-      text = result.text;
-    } catch (err) {
-      toast(`OCR unavailable: ${err.message}. Fill fields manually.`);
-    }
-    const parsed = parseCard(text);
-    parsed.image_path = meta.storage_path;
-    state.contact = normalizeContact(parsed);
+      const meta = await storageApi.attachPhoto(file, { backup: true });
+      imagePath = meta.storage_path;
+    } catch { /* offline backup can retry later; continue with extraction */ }
+
+    const result = await processBusinessCard(file, { signal: state.scanAbort.signal });
+    if (state.scan.status !== "processing") return; // cancelled mid-flight
+
+    const contact = normalizeContact({ ...result, image_path: imagePath });
+    state.contact = contact;
+    state.scan = { blob: null, status: "idle", message: "" };
+    state.scanAbort = null;
     state.modal = "review-contact";
+    render();
+    if (result.confidence !== null && result.confidence < 0.5) {
+      toast("Low-confidence scan — please review the fields.");
+    }
   } catch (err) {
-    toast(`Unable to scan card: ${err.message}`);
-  } finally {
-    state.busy = false; render();
+    if (err?.name === "AbortError") return; // cancelled; UI already reset
+    state.scan = { blob: file, status: "error", message: err?.message || "Scan failed." };
+    state.scanAbort = null;
+    state.modal = "scan-error";
+    render();
   }
+}
+
+function cancelScan() {
+  try { state.scanAbort?.abort(); } catch { /* ignore */ }
+  state.scan = { blob: null, status: "idle", message: "" };
+  state.scanAbort = null;
+  state.modal = null;
+  render();
 }
 
 // ---------------------------------------------------------------------------
@@ -525,7 +553,6 @@ async function handleAction(action, a) {
 
     // --- meetings ---
     case "detect": await detect(); break;
-    case "confirm-reminder": await confirmReminder(); break;
     case "calendar": {
       const m = JSON.parse(a.dataset.meeting);
       downloadFile(buildICS(m), `${safeName(m.title, "daylog-event")}.ics`, "text/calendar;charset=utf-8");
@@ -574,6 +601,9 @@ async function handleAction(action, a) {
     case "scan":
       state.scanMode = true; state.cardSourceMode = false; state.photoTarget = null;
       state.modal = "photo"; render(); break;
+    case "retry-scan":
+      if (state.scan.blob) await startScan(state.scan.blob); break;
+    case "cancel-scan": cancelScan(); break;
     case "save-contact": await saveContact(); break;
     case "export-contact": {
       const c = state.contacts.find((x) => x.id === a.dataset.contact);
@@ -587,18 +617,14 @@ async function handleAction(action, a) {
   }
 }
 
+// Runs on the Detect button press. No modal dependency: an ambiguous hour
+// (e.g. "at 7") is added with a best-guess time and the toast notes it so the
+// user can edit — no blocking confirmation dialog.
 async function detect() {
   const r = detectMeeting(state.draft.future_plans, state.draft.date);
   if (!r.meeting) { toast(r.status); return; }
-  state.pendingMeeting = r.meeting;
-  if (r.confirm) { state.modal = "confirm-reminder"; render(); return; }
   state.draft.meetings = [r.meeting];
-  toast(r.status); render();
-}
-async function confirmReminder() {
-  state.draft.meetings = [state.pendingMeeting];
-  state.modal = null;
-  toast("Reminder added. Export it to Calendar below.");
+  toast(r.confirm ? `${r.status} — edit the time if needed` : r.status);
   render();
 }
 
@@ -720,10 +746,20 @@ async function refreshEntries() {
 // ---------------------------------------------------------------------------
 // Input handling
 // ---------------------------------------------------------------------------
+// Live-toggle the Detect button without a full re-render (a render() here would
+// rebuild innerHTML and drop the textarea's focus/cursor mid-typing).
+function syncDetectButton() {
+  const el = document.querySelector('[data-action="detect"]');
+  if (el) el.disabled = !state.draft.future_plans.trim() || state.busy;
+}
+
 app.addEventListener("input", (e) => {
   if (e.target.id === "date") state.draft.date = e.target.value;
   if (e.target.id === "daily_notes") state.draft.daily_notes = e.target.value;
-  if (e.target.id === "future_plans") state.draft.future_plans = e.target.value;
+  if (e.target.id === "future_plans") {
+    state.draft.future_plans = e.target.value;
+    syncDetectButton();
+  }
   if (e.target.id === "search") onSearchInput(e.target.value);
   if (e.target.classList.contains("contact-field")) {
     const field = e.target.dataset.field;
@@ -743,7 +779,7 @@ function wireFileInputs() {
       e.target.value = "";
       if (!files.length) return;
 
-      if (state.scanMode) { state.scanMode = false; await scanFile(files[0]); return; }
+      if (state.scanMode) { state.scanMode = false; await startScan(files[0]); return; }
 
       if (state.cardSourceMode) {
         state.cardSourceMode = false;

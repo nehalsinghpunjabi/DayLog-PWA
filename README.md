@@ -54,7 +54,7 @@ daylog-pwa-rebuild/
 ├── icons/                     App icons (SVG + generated PNGs)
 ├── supabase/
 │   ├── migrations/            0001 schema · 0002 RLS · 0003 search · 0004 storage
-│   ├── functions/ocr-extract/ OCR Edge Function (server-side provider abstraction)
+│   ├── functions/business-card-process/  OCR.Space + Grok (keys server-side only)
 │   ├── schema.sql             Consolidated schema (psql \i)
 │   ├── policies.sql           All RLS + storage policies (standalone)
 │   └── config.toml            Supabase CLI config
@@ -177,9 +177,26 @@ Screen is the expected iOS install path.
 On Vercel, `build.sh` generates `js/config.js` from the env vars at build time.
 Locally, copy `js/config.example.js` to `js/config.js` and edit it by hand.
 
-No other keys are required for v1. The `service_role` key must **never** be
-placed in client config — it bypasses RLS. Optional server-side OCR vendor keys
-(e.g. `OCR_SPACE_API_KEY`) are set only on the Edge Function.
+The `service_role` key must **never** be placed in client config — it bypasses
+RLS.
+
+### Server-side secrets (Supabase only — never in the frontend)
+
+Set on the Supabase project for business-card scanning:
+
+| Secret | Required | Purpose |
+|---|---|---|
+| `OCR_SPACE_API_KEY` | for scanning | OCR.Space image OCR |
+| `GROK_API_KEY` | optional | xAI Grok contact structuring (low-confidence cases) |
+
+```bash
+supabase secrets set OCR_SPACE_API_KEY=... GROK_API_KEY=...
+supabase functions deploy business-card-process
+```
+
+These live only in Supabase secrets and are used inside the
+`business-card-process` Edge Function. The browser never sees them — it calls the
+function, which calls OCR.Space and Grok on the server.
 
 ---
 

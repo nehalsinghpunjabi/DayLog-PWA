@@ -88,13 +88,14 @@ DayLog caches the blob locally (instant + offline) and uploads an **optional**
 backup copy to Supabase Storage. If the upload fails or the user is offline, the
 local copy still exists and DayLog is never the sole owner of the image.
 
-## OCR provider abstraction
+## Business-card OCR & extraction (server-side)
 
-The scan UI, review form, and contact model depend only on the `OCRProvider`
-interface (`js/ocr/provider.js`). Shipped providers: `TesseractProvider`
-(in-browser, offline) and `EdgeProvider` (posts to the `ocr-extract` Edge
-Function, which abstracts server-side vendors). Adding a vendor never touches the
-UI or data model. See [OCR.md](OCR.md).
+Card scanning runs in the `business-card-process` Edge Function so no API keys
+reach the browser: image → OCR.Space → deterministic extraction + confidence →
+Grok structuring only when confidence is low → validated JSON. The client
+([js/ocr/extract.js](../js/ocr/extract.js)) calls the function and falls back to
+in-browser Tesseract only when offline. Keys (`OCR_SPACE_API_KEY`,
+`GROK_API_KEY`) live in Supabase secrets. See [OCR.md](OCR.md).
 
 ## Offline & PWA
 

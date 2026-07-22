@@ -2,5 +2,8 @@
 # `supabase link` fills in project_id for your own project.
 project_id = "daylog"
 
-[functions.ocr-extract]
+# Business-card OCR + Grok extraction. Requires OCR_SPACE_API_KEY and
+# (optionally) GROK_API_KEY set via `supabase secrets set`. JWT-verified so only
+# authenticated users can call it.
+[functions.business-card-process]
 verify_jwt = true

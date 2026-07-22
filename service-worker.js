@@ -12,7 +12,7 @@
  * flag, and navigations are handled explicitly.
  */
 
-const VERSION = "daylog-v2.0.1";
+const VERSION = "daylog-v2.0.2";
 const SHELL = `${VERSION}-shell`;
 const RUNTIME = `${VERSION}-runtime`;
 
@@ -33,6 +33,7 @@ const SHELL_ASSETS = [
   "./js/api/cache.js",
   "./js/api/db.js",
   "./js/api/storage.js",
+  "./js/ocr/extract.js",
   "./js/ocr/provider.js",
   "./js/ocr/parse-card.js",
   "./icons/icon.svg",

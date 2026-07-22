@@ -51,18 +51,22 @@ The client already calls `signInWithOAuth` (see `js/auth.js`). To turn them on:
 2. Add sign-in buttons that call `auth.signInWithApple()` / `auth.signInWithGoogle()`.
 No schema changes are needed — new users get a `profiles` row automatically.
 
-## 4. OCR Edge Function (optional)
+## 4. Business-card Edge Function
 
-The app works with in-browser Tesseract OCR out of the box. To add server-side
-OCR:
+Card scanning runs server-side so no API keys reach the browser. Deploy the
+function and set its secrets:
 
 ```bash
-supabase functions deploy ocr-extract
-# optional vendor key (only if you switch the provider):
-supabase secrets set OCR_PROVIDER=ocrspace OCR_SPACE_API_KEY=your_key
+supabase functions deploy business-card-process
+supabase secrets set OCR_SPACE_API_KEY=your_ocrspace_key
+supabase secrets set GROK_API_KEY=your_grok_key   # optional (AI structuring)
 ```
 
-See [OCR.md](OCR.md) for the provider model.
+- `OCR_SPACE_API_KEY` — required for image OCR.
+- `GROK_API_KEY` — optional; without it the deterministic extraction is returned.
+
+If the function is not deployed, scanning falls back to in-browser Tesseract.
+See [OCR.md](OCR.md) for the full pipeline.
 
 ## 5. App configuration
 
