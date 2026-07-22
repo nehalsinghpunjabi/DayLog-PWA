@@ -11,6 +11,7 @@ import { detectMeeting, formatTime } from "./meetings.js";
 import { buildICS, buildVCard, downloadFile, safeName } from "./exporters.js";
 import { processBusinessCard } from "./ocr/extract.js";
 import { isDuplicate } from "./ocr/parse-card.js";
+import { prepareForOcr } from "./image.js";
 
 const $ = (s) => document.querySelector(s);
 const app = $("#app");
@@ -444,14 +445,21 @@ async function startScan(file) {
   state.modal = "scanning";
   render();
   try {
-    // Keep a backup copy (original stays in Apple Photos); non-fatal on failure.
+    // Storage keeps the ORIGINAL image (original also stays in Apple Photos);
+    // non-fatal on failure.
     let imagePath = null;
     try {
       const meta = await storageApi.attachPhoto(file, { backup: true });
       imagePath = meta.storage_path;
     } catch (e) { console.warn("[DayLog scan] backup upload skipped:", e?.message); }
 
-    const result = await processBusinessCard(file);
+    // Normalize a COPY for OCR so input is identical across devices/browsers:
+    // JPEG, EXIF-rotated, longest side <= 2000px, ~85% quality.
+    const ocrBlob = await prepareForOcr(file);
+    console.info("[DayLog scan] normalized OCR image", {
+      originalBytes: file.size, ocrBytes: ocrBlob.size, ocrType: ocrBlob.type,
+    });
+    const result = await processBusinessCard(ocrBlob);
     if (state.scanToken !== token) { console.info("[DayLog scan] cancelled; ignoring result"); return; }
 
     console.info("[DayLog scan] extracted contact", { source: result.source, confidence: result.confidence });

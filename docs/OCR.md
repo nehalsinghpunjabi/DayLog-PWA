@@ -5,6 +5,9 @@ reach the browser. The frontend only ever talks to Supabase.
 
 ```
 iPhone PWA
+   │  original image ─────────────► Supabase Storage (backup) + Apple Photos
+   │
+   │  normalize for OCR (js/image.js): JPEG · EXIF-rotated · ≤2000px · ~85%
    │  (image bytes, base64)
    ▼
 Supabase Edge Function  business-card-process   ← OCR_SPACE_API_KEY, GROQ_API_KEY
@@ -17,6 +20,27 @@ Structured contact JSON
    ▼
 Editable preview → Save → VCF export (iOS Contacts)
 ```
+
+## Image normalization (before OCR)
+
+To make OCR input **identical across iPhone Safari, the installed PWA, Chrome,
+and desktop**, the client normalizes a *copy* of the image before sending it
+([js/image.js](../js/image.js) `prepareForOcr`):
+
+1. Decode with **EXIF orientation applied** (`createImageBitmap(blob,
+   { imageOrientation: "from-image" })`), falling back to an `<img>` decode.
+2. **Downscale** so the longest side is ≤ **2000px** (never upscaled).
+3. Re-encode as **JPEG at ~85%** quality.
+
+The **original** image is untouched — it is uploaded to Supabase Storage as the
+backup copy and remains in Apple Photos. Only the normalized copy goes to OCR.
+If normalization fails for any reason, the original blob is sent so a scan is
+never blocked.
+
+This removes the usual cross-platform inconsistencies (HEIC vs JPEG, unrotated
+EXIF camera shots, 12MP vs downscaled). JPEG encoders differ slightly per
+browser, so bytes are not identical, but the OCR-relevant properties — pixels,
+orientation, dimensions, and format — are.
 
 ## Secrets (server-side only)
 
