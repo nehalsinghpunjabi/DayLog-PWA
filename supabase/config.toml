@@ -1,0 +1,6 @@
+# Supabase CLI project config for DayLog 2.0.
+# `supabase link` fills in project_id for your own project.
+project_id = "daylog"
+
+[functions.ocr-extract]
+verify_jwt = true

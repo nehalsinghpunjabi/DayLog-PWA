@@ -1,0 +1,14 @@
+# Runtime config with your Supabase keys — never commit.
+js/config.js
+
+# Supabase local
+supabase/.branches
+supabase/.temp
+.env
+.env.*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.log
+node_modules/

@@ -1,0 +1,59 @@
+# Deploy DayLog 2.0 to GitHub Pages.
+# Generates js/config.js from repository variables at build time so no keys are
+# committed. Set these under Settings -> Secrets and variables -> Actions:
+#   Variables:  SUPABASE_URL, SUPABASE_ANON_KEY
+# The anon key is a public client key (RLS protects data), so a repo *Variable*
+# is appropriate; you may use Secrets instead if you prefer.
+
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate runtime config
+        run: |
+          cat > js/config.js <<EOF
+          window.DAYLOG_CONFIG = {
+            SUPABASE_URL: "${{ vars.SUPABASE_URL }}",
+            SUPABASE_ANON_KEY: "${{ vars.SUPABASE_ANON_KEY }}",
+          };
+          EOF
+
+      - name: Fail if config is empty
+        run: |
+          if grep -q '""' js/config.js; then
+            echo "::error::SUPABASE_URL / SUPABASE_ANON_KEY repository variables are not set."
+            exit 1
+          fi
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
