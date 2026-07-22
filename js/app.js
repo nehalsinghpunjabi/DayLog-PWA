@@ -45,7 +45,7 @@ const state = {
   photoTarget: null,
   contact: null,
   scan: { blob: null, status: "idle", message: "" },
-  scanAbort: null,
+  scanToken: null,
 };
 
 // ---------------------------------------------------------------------------
@@ -437,8 +437,10 @@ function onSearchInput(value) {
 // photo -> upload backup -> Edge Function (OCR.Space + Grok) -> review.
 // Shows a scanning modal with Cancel, and a scan-error modal with Retry/Cancel.
 async function startScan(file) {
+  console.info("[DayLog scan] start", { name: file?.name, size: file?.size, type: file?.type });
+  const token = Symbol("scan");
+  state.scanToken = token;
   state.scan = { blob: file, status: "processing", message: "Reading business card…" };
-  state.scanAbort = new AbortController();
   state.modal = "scanning";
   render();
   try {
@@ -447,33 +449,34 @@ async function startScan(file) {
     try {
       const meta = await storageApi.attachPhoto(file, { backup: true });
       imagePath = meta.storage_path;
-    } catch { /* offline backup can retry later; continue with extraction */ }
+    } catch (e) { console.warn("[DayLog scan] backup upload skipped:", e?.message); }
 
-    const result = await processBusinessCard(file, { signal: state.scanAbort.signal });
-    if (state.scan.status !== "processing") return; // cancelled mid-flight
+    const result = await processBusinessCard(file);
+    if (state.scanToken !== token) { console.info("[DayLog scan] cancelled; ignoring result"); return; }
 
-    const contact = normalizeContact({ ...result, image_path: imagePath });
-    state.contact = contact;
+    console.info("[DayLog scan] extracted contact", { source: result.source, confidence: result.confidence });
+    state.contact = normalizeContact({ ...result, image_path: imagePath });
     state.scan = { blob: null, status: "idle", message: "" };
-    state.scanAbort = null;
     state.modal = "review-contact";
     render();
-    if (result.confidence !== null && result.confidence < 0.5) {
+    if (result.offlineFallback) {
+      toast("Offline — scanned on-device. Review the fields.");
+    } else if (result.confidence !== null && result.confidence < 0.5) {
       toast("Low-confidence scan — please review the fields.");
     }
   } catch (err) {
-    if (err?.name === "AbortError") return; // cancelled; UI already reset
+    if (state.scanToken !== token) return; // superseded/cancelled
+    console.error("[DayLog scan] failed:", err);
     state.scan = { blob: file, status: "error", message: err?.message || "Scan failed." };
-    state.scanAbort = null;
     state.modal = "scan-error";
     render();
   }
 }
 
 function cancelScan() {
-  try { state.scanAbort?.abort(); } catch { /* ignore */ }
+  console.info("[DayLog scan] cancelled by user");
+  state.scanToken = null; // any in-flight result will be ignored
   state.scan = { blob: null, status: "idle", message: "" };
-  state.scanAbort = null;
   state.modal = null;
   render();
 }

@@ -43,44 +43,70 @@ function toContactModel(res, rawText) {
   };
 }
 
-async function callEdge(body, signal) {
-  const { data, error } = await supabase.functions.invoke(
-    "business-card-process", { body, ...(signal ? { signal } : {}) });
-  if (error) throw error;
-  if (data?.error) throw new Error(data.error);
+const FN_NAME = "business-card-process";
+
+// The endpoint the client will actually hit — logged so a project/URL mismatch
+// (e.g. functions deployed to a different project than SUPABASE_URL points to)
+// is immediately visible.
+function functionsUrl() {
+  try { return supabase.functions?.url || "(unknown)"; } catch { return "(unknown)"; }
+}
+
+// Invoke the Edge Function and, on failure, extract the REAL error detail from
+// the underlying HTTP response so the true cause (404 not-deployed, 401 auth,
+// 500 runtime) is surfaced instead of a generic message.
+async function callEdge(body) {
+  console.info(`[DayLog scan] invoke '${FN_NAME}' →`, functionsUrl() + `/${FN_NAME}`);
+  const { data, error } = await supabase.functions.invoke(FN_NAME, { body });
+
+  if (error) {
+    let status;
+    let detail = error.message || "invoke failed";
+    // supabase-js FunctionsHttpError carries the Response on error.context.
+    try {
+      const ctx = error.context;
+      if (ctx && typeof ctx.status === "number") status = ctx.status;
+      if (ctx && typeof ctx.json === "function") {
+        const j = await ctx.clone().json();
+        if (j?.error) detail = j.error;
+      }
+    } catch { /* body not JSON — keep generic detail */ }
+    const wrapped = new Error(
+      status ? `Edge Function ${FN_NAME} returned ${status}: ${detail}` : detail);
+    wrapped.name = error.name || "FunctionsError";
+    wrapped.status = status;
+    console.error(`[DayLog scan] invoke error (${status ?? "no-status"}):`, detail, error);
+    throw wrapped;
+  }
+
+  if (data?.error) {
+    console.error("[DayLog scan] function returned error payload:", data.error);
+    throw new Error(data.error);
+  }
+  console.info("[DayLog scan] invoke response:", data);
   return data;
 }
 
 // Process a business-card image. Returns a normalised contact object.
-// `signal` (optional AbortSignal) lets the caller cancel an in-flight scan.
-export async function processBusinessCard(blob, { signal } = {}) {
+// Online failures are SURFACED (thrown) so the UI can show them. Only a genuine
+// offline condition falls back to local Tesseract OCR.
+export async function processBusinessCard(blob) {
   const mime = blob.type || "image/jpeg";
+  const base64 = await blobToBase64(blob);
+  console.info("[DayLog scan] sending image to Edge Function", { bytes: blob.size, mime });
 
-  // PRIMARY: image -> Edge Function (OCR.Space + Grok).
   try {
-    const base64 = await blobToBase64(blob);
-    const res = await callEdge({ image_base64: base64, mime_type: mime }, signal);
+    const res = await callEdge({ image_base64: base64, mime_type: mime });
     return toContactModel(res, "");
-  } catch (primaryErr) {
-    if (signal?.aborted) throw new DOMException("Scan cancelled", "AbortError");
-    console.warn("DayLog: primary card processing failed, trying fallback.", primaryErr);
-
-    // FALLBACK: local Tesseract OCR.
-    const text = await tesseractText(blob);
-    if (signal?.aborted) throw new DOMException("Scan cancelled", "AbortError");
-
-    // If we can reach the Edge Function, let Grok structure the local text.
-    try {
-      const res = await callEdge({ ocr_text: text }, signal);
-      return toContactModel(res, text);
-    } catch {
-      // Fully offline: parse locally with heuristics.
+  } catch (err) {
+    const offline = typeof navigator !== "undefined" && navigator.onLine === false;
+    if (offline) {
+      console.warn("[DayLog scan] offline — using local Tesseract fallback.", err);
+      const text = await tesseractText(blob);
       const parsed = parseCard(text);
-      return {
-        ...parsed,
-        confidence: null,
-        source: "tesseract-local",
-      };
+      return { ...parsed, confidence: null, source: "tesseract-local", offlineFallback: true };
     }
+    // Online error — do NOT hide it behind a fallback; surface to the caller.
+    throw err;
   }
 }
