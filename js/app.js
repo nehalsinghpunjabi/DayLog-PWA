@@ -11,7 +11,7 @@ import { detectMeeting, formatTime } from "./meetings.js";
 import { buildICS, buildVCard, downloadFile, safeName } from "./exporters.js";
 import { processBusinessCard } from "./ocr/extract.js";
 import { isDuplicate } from "./ocr/parse-card.js";
-import { prepareForOcr } from "./image.js";
+import { imageMetadata, prepareForOcr } from "./image.js";
 
 const $ = (s) => document.querySelector(s);
 const app = $("#app");
@@ -266,6 +266,18 @@ function contactFields(c) {
   </div>`;
 }
 
+function scanDebugPanel(contact) {
+  if (!window.DAYLOG_CONFIG?.DEBUG_SCAN) return "";
+  const debug = contact?.debug || {};
+  const print = (value) => esc(typeof value === "string" ? value : JSON.stringify(value ?? null, null, 2));
+  return `<details class="scan-debug"><summary>Scan debug (development only)</summary>
+    <div class="field"><label>OCR Raw Text</label><pre>${print(contact?.raw_ocr_text)}</pre></div>
+    <div class="field"><label>Groq JSON</label><pre>${print(debug.groq_parsed_json)}</pre></div>
+    <div class="field"><label>Final Contact JSON</label><pre>${print(debug.final_contact ?? contact)}</pre></div>
+    <div class="field"><label>Source / Confidence</label><pre>${print({ source: contact?.source, confidence: contact?.confidence })}</pre></div>
+  </details>`;
+}
+
 function modal() {
   const m = state.modal;
   if (!m) return "";
@@ -301,7 +313,7 @@ function modal() {
       <div class="actions">${btn("Cancel", "close", "ghost")}${btn("Delete", "confirm-delete-card", "danger")}</div>`;
   }
   if (m === "review-contact") {
-    body = `<h2>Review Contact</h2>${contactFields(state.contact)}
+    body = `<h2>Review Contact</h2>${contactFields(state.contact)}${scanDebugPanel(state.contact)}
       <div class="actions">${btn("Cancel", "close", "ghost")}${btn("Save Contact", "save-contact")}</div>`;
   }
   if (m === "duplicate") {
@@ -438,7 +450,7 @@ function onSearchInput(value) {
 // photo -> upload backup -> Edge Function (OCR.Space + Groq) -> review.
 // Shows a scanning modal with Cancel, and a scan-error modal with Retry/Cancel.
 async function startScan(file) {
-  console.info("[DayLog scan] start", { name: file?.name, size: file?.size, type: file?.type });
+  if (window.DAYLOG_CONFIG?.DEBUG_SCAN) console.info("[DayLog scan] selected file", await imageMetadata(file));
   const token = Symbol("scan");
   state.scanToken = token;
   state.scan = { blob: file, status: "processing", message: "Reading business card…" };
@@ -456,13 +468,11 @@ async function startScan(file) {
     // Normalize a COPY for OCR so input is identical across devices/browsers:
     // JPEG, EXIF-rotated, longest side <= 2000px, ~85% quality.
     const ocrBlob = await prepareForOcr(file);
-    console.info("[DayLog scan] normalized OCR image", {
-      originalBytes: file.size, ocrBytes: ocrBlob.size, ocrType: ocrBlob.type,
-    });
+    if (window.DAYLOG_CONFIG?.DEBUG_SCAN) console.info("[DayLog scan] processed image", await imageMetadata(ocrBlob));
     const result = await processBusinessCard(ocrBlob);
     if (state.scanToken !== token) { console.info("[DayLog scan] cancelled; ignoring result"); return; }
 
-    console.info("[DayLog scan] extracted contact", { source: result.source, confidence: result.confidence });
+    console.info("[DayLog scan] final contact received before modal mapping:", JSON.stringify(result, null, 2));
     state.contact = normalizeContact({ ...result, image_path: imagePath });
     state.scan = { blob: null, status: "idle", message: "" };
     state.modal = "review-contact";

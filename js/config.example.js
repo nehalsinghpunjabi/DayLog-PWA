@@ -10,4 +10,6 @@
 window.DAYLOG_CONFIG = {
   SUPABASE_URL: "https://YOUR-PROJECT-ref.supabase.co",
   SUPABASE_ANON_KEY: "YOUR-ANON-PUBLIC-KEY",
+  // Set true only while tracing a scan. It exposes OCR/contact data in the browser.
+  DEBUG_SCAN: false,
 };

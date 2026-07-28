@@ -40,6 +40,7 @@ function toContactModel(res, rawText) {
     raw_ocr_text: res.raw_text || rawText || "",
     confidence: typeof res.confidence === "number" ? res.confidence : null,
     source: res.source || "edge",
+    debug: res.debug || null,
   };
 }
 
@@ -56,7 +57,13 @@ function functionsUrl() {
 // the underlying HTTP response so the true cause (404 not-deployed, 401 auth,
 // 500 runtime) is surfaced instead of a generic message.
 async function callEdge(body) {
-  console.info(`[DayLog scan] invoke '${FN_NAME}' →`, functionsUrl() + `/${FN_NAME}`);
+  const session = await supabase.auth.getSession();
+  const requestBytes = new TextEncoder().encode(JSON.stringify(body)).byteLength;
+  console.info(`[DayLog scan] Edge Function request`, {
+    url: functionsUrl() + `/${FN_NAME}`,
+    payloadBytes: requestBytes,
+    authenticated: Boolean(session.data.session?.access_token),
+  });
   const { data, error } = await supabase.functions.invoke(FN_NAME, { body });
 
   if (error) {
@@ -83,7 +90,7 @@ async function callEdge(body) {
     console.error("[DayLog scan] function returned error payload:", data.error);
     throw new Error(data.error);
   }
-  console.info("[DayLog scan] invoke response:", data);
+  console.info("[DayLog scan] exact Edge Function JSON:", JSON.stringify(data, null, 2));
   return data;
 }
 

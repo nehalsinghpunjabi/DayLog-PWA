@@ -15,6 +15,42 @@
 const MAX_EDGE = 2000;
 const QUALITY = 0.85;
 
+function scanDebugEnabled() {
+  return Boolean(window.DAYLOG_CONFIG?.DEBUG_SCAN);
+}
+
+// JPEG EXIF is the only orientation metadata expected from the camera inputs
+// used here. This deliberately reads only the header, not the image payload.
+async function exifOrientation(blob) {
+  if (!/jpe?g/i.test(blob.type)) return null;
+  const bytes = new DataView(await blob.slice(0, 64 * 1024).arrayBuffer());
+  if (bytes.byteLength < 4 || bytes.getUint16(0) !== 0xffd8) return null;
+  let offset = 2;
+  while (offset + 4 <= bytes.byteLength) {
+    if (bytes.getUint8(offset) !== 0xff) break;
+    const marker = bytes.getUint8(offset + 1);
+    const length = bytes.getUint16(offset + 2);
+    if (marker === 0xe1 && offset + 10 <= bytes.byteLength &&
+        bytes.getUint32(offset + 4) === 0x45786966) {
+      const tiff = offset + 10;
+      const little = bytes.getUint16(tiff) === 0x4949;
+      if (tiff + 8 > bytes.byteLength) return null;
+      const ifd = tiff + bytes.getUint32(tiff + 4, little);
+      if (ifd + 2 > bytes.byteLength) return null;
+      const count = bytes.getUint16(ifd, little);
+      for (let i = 0; i < count; i++) {
+        const entry = ifd + 2 + (i * 12);
+        if (entry + 12 > bytes.byteLength) return null;
+        if (bytes.getUint16(entry, little) === 0x0112) return bytes.getUint16(entry + 8, little);
+      }
+      return null;
+    }
+    if (length < 2) break;
+    offset += 2 + length;
+  }
+  return null;
+}
+
 function canvasToBlob(canvas, type, quality) {
   return new Promise((resolve) => {
     if (canvas.toBlob) {
@@ -65,6 +101,19 @@ function sizeOf(source) {
   };
 }
 
+export async function imageMetadata(blob) {
+  let dimensions = { width: 0, height: 0 };
+  try {
+    const source = await decode(blob);
+    dimensions = sizeOf(source);
+    source.close?.();
+  } catch { /* dimensions stay zero; normalization will report its own error */ }
+  return {
+    name: blob.name || "(unnamed blob)", type: blob.type || "(missing)", size: blob.size,
+    ...dimensions, exifOrientation: await exifOrientation(blob).catch(() => null),
+  };
+}
+
 // Normalize an image for OCR. Returns a JPEG Blob (EXIF-applied, <=maxEdge,
 // quality). On any failure it returns the ORIGINAL blob so a scan is never
 // blocked by preprocessing.
@@ -89,6 +138,10 @@ export async function prepareForOcr(blob, { maxEdge = MAX_EDGE, quality = QUALIT
     source.close?.();
 
     const out = await canvasToBlob(canvas, "image/jpeg", quality);
+    if (scanDebugEnabled()) console.info("[DayLog scan] preprocessing", {
+      original: { size: blob.size, type: blob.type, width, height },
+      processed: { size: out?.size ?? blob.size, type: out?.type ?? blob.type, width: w, height: h },
+    });
     return out || blob;
   } catch (err) {
     console.warn("[DayLog scan] image normalization failed; using original.", err);

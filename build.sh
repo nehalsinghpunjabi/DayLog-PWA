@@ -22,7 +22,8 @@ cat > js/config.js <<EOF
 // Do not edit or commit; regenerated on every deploy.
 window.DAYLOG_CONFIG = {
   SUPABASE_URL: "${SUPABASE_URL}",
-  SUPABASE_ANON_KEY: "${SUPABASE_ANON_KEY}"
+  SUPABASE_ANON_KEY: "${SUPABASE_ANON_KEY}",
+  DEBUG_SCAN: ${DEBUG_SCAN:-false}
 };
 EOF
 

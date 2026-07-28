@@ -12,7 +12,7 @@
  * flag, and navigations are handled explicitly.
  */
 
-const VERSION = "daylog-v2.0.3";
+const VERSION = "daylog-v2.0.4";
 const SHELL = `${VERSION}-shell`;
 const RUNTIME = `${VERSION}-runtime`;
 

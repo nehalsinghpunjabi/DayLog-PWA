@@ -37,6 +37,13 @@ const EMPTY_CONTACT = {
   website: "",
   address: "",
 };
+const DEBUG_SCAN = Deno.env.get("DEBUG_SCAN") === "true";
+type ScanDebug = Record<string, unknown>;
+function debugLog(label: string, value: unknown, debug: ScanDebug) {
+  if (!DEBUG_SCAN) return;
+  debug[label] = value;
+  console.info(`[business-card-process] ${label}:`, JSON.stringify(value));
+}
 
 interface RequestBody {
   image_base64?: string;
@@ -45,7 +52,7 @@ interface RequestBody {
 }
 
 // --- OCR.Space -------------------------------------------------------------
-async function ocrSpace(base64: string, mime: string): Promise<string> {
+async function ocrSpace(base64: string, mime: string, debug: ScanDebug): Promise<string> {
   const key = Deno.env.get("OCR_SPACE_API_KEY");
   if (!key) throw new Error("OCR_SPACE_API_KEY is not configured.");
   const body = new URLSearchParams({
@@ -61,14 +68,17 @@ async function ocrSpace(base64: string, mime: string): Promise<string> {
     body,
   });
   const json = await resp.json();
+  debugLog("ocr_space", { status: resp.status, raw_json: json }, debug);
   if (json.IsErroredOnProcessing) {
     throw new Error(
       Array.isArray(json.ErrorMessage) ? json.ErrorMessage[0] : "OCR failed.");
   }
-  return (json.ParsedResults ?? [])
+  const text = (json.ParsedResults ?? [])
     .map((r: { ParsedText?: string }) => r.ParsedText ?? "")
     .join("\n")
     .trim();
+  debugLog("ocr_parsed", { text, confidence: json?.Confidence ?? null }, debug);
+  return text;
 }
 
 // --- Deterministic extraction ---------------------------------------------
@@ -142,7 +152,7 @@ function validateContact(raw: unknown): typeof EMPTY_CONTACT | null {
 // via GROQ_MODEL and defaults to a currently supported production model.
 const DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile";
 
-async function groqStructure(text: string): Promise<typeof EMPTY_CONTACT | null> {
+async function groqStructure(text: string, debug: ScanDebug): Promise<typeof EMPTY_CONTACT | null> {
   const key = Deno.env.get("GROQ_API_KEY");
   if (!key) {
     console.warn("[business-card-process] GROQ_API_KEY not set — skipping AI structuring.");
@@ -167,8 +177,7 @@ async function groqStructure(text: string): Promise<typeof EMPTY_CONTACT | null>
     ],
   };
 
-  console.info("[business-card-process] Groq model:", model);
-  console.info("[business-card-process] Groq request payload:", JSON.stringify(requestBody));
+  debugLog("groq_request", { model, payload: requestBody }, debug);
 
   const resp = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
@@ -180,11 +189,12 @@ async function groqStructure(text: string): Promise<typeof EMPTY_CONTACT | null>
   });
 
   if (!resp.ok) {
-    console.error("[business-card-process] Groq error", resp.status, await resp.text());
+    const responseText = await resp.text();
+    debugLog("groq_response", { status: resp.status, payload: responseText }, debug);
     return null;
   }
   const data = await resp.json();
-  console.info("[business-card-process] Groq response payload:", JSON.stringify(data));
+  debugLog("groq_response", { status: resp.status, payload: data }, debug);
   const content: string = data?.choices?.[0]?.message?.content ?? "";
   if (!content) return null;
 
@@ -197,7 +207,9 @@ async function groqStructure(text: string): Promise<typeof EMPTY_CONTACT | null>
   } catch {
     return null;
   }
-  return validateContact(parsed);
+  const contact = validateContact(parsed);
+  debugLog("groq_parsed_json", contact, debug);
+  return contact;
 }
 
 // --- Handler ---------------------------------------------------------------
@@ -209,19 +221,35 @@ serve(async (request) => {
 
   try {
     const body = (await request.json()) as RequestBody;
+    const debug: ScanDebug = {};
+    debugLog("edge_request", {
+      payload_bytes: Number(request.headers.get("content-length")) || null,
+      url: request.url,
+      authenticated: Boolean(request.headers.get("authorization")),
+      image_mime: body.mime_type ?? null,
+      image_base64_length: body.image_base64?.length ?? 0,
+    }, debug);
 
     // 1. Obtain OCR text (from OCR.Space, or client-provided fallback text).
     let text = (body.ocr_text ?? "").trim();
     let ocrSource = "client";
     if (!text) {
       if (!body.image_base64) return json({ error: "image_base64 or ocr_text required" }, 400);
-      text = await ocrSpace(body.image_base64, body.mime_type ?? "image/jpeg");
+      text = await ocrSpace(body.image_base64, body.mime_type ?? "image/jpeg", debug);
       ocrSource = "ocrspace";
     }
-    if (!text) return json({ ...EMPTY_CONTACT, confidence: 0, source: ocrSource, raw_text: "" });
+    if (!text) {
+      const final = { ...EMPTY_CONTACT, confidence: 0, source: ocrSource, raw_text: "" };
+      debugLog("final_contact", final, debug);
+      return json(DEBUG_SCAN ? { ...final, debug } : final);
+    }
 
     // 2. Deterministic extraction + confidence.
     const det = deterministicExtract(text);
+    debugLog("deterministic", {
+      email: det.contact.email, phone: det.contact.phone, website: det.contact.website,
+      confidence: det.confidence, contact: det.contact,
+    }, debug);
 
     // 3. Low confidence -> Groq structuring (if available). Merge, preferring
     //    Groq for descriptive fields but keeping deterministic contact points
@@ -232,7 +260,7 @@ serve(async (request) => {
 
     const HIGH = 0.75;
     if (det.confidence < HIGH) {
-      const groq = await groqStructure(text);
+      const groq = await groqStructure(text, debug);
       if (groq) {
         contact = {
           name: groq.name || det.contact.name,
@@ -248,7 +276,10 @@ serve(async (request) => {
       }
     }
 
-    return json({ ...contact, confidence, source, raw_text: text });
+    const final = { ...contact, confidence, source, raw_text: text };
+    debugLog("final_contact", final, debug);
+    console.log(JSON.stringify(final, null, 2));
+    return json(DEBUG_SCAN ? { ...final, debug } : final);
   } catch (err) {
     const message = err instanceof Error ? err.message : "processing failed";
     return json({ error: message }, 400);
