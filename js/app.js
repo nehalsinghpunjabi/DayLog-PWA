@@ -44,6 +44,8 @@ const state = {
   cardSide: "front",
   cardSourceMode: false,
   photoTarget: null,
+  photoSave: null,
+  photoSaveQueue: [],
   contact: null,
   scan: { blob: null, status: "idle", message: "" },
   scanToken: null,
@@ -73,6 +75,45 @@ function btn(label, action, kind = "", disabled = false, extra = "") {
 }
 function toArray(value) {
   return String(value || "").split(/[,;\n]+/).map((s) => s.trim()).filter(Boolean);
+}
+
+function imageFilename(blob, index = 1) {
+  if (blob.name) return blob.name;
+  const ext = blob.type === "image/png" ? "png" : blob.type === "image/webp" ? "webp" : "jpg";
+  return `daylog-photo-${Date.now()}-${index}.${ext}`;
+}
+
+// Safari/PWAs cannot write to Photos directly. Sharing the original File is the
+// closest native route: iOS presents its share sheet with "Save Image".
+async function sharePhotoToIos(item) {
+  const blob = item.blob;
+  const file = new File([blob], imageFilename(blob, item.index), {
+    type: blob.type || "image/jpeg", lastModified: Date.now(),
+  });
+  const data = { files: [file], title: "DayLog photo" };
+  if (navigator.share && (!navigator.canShare || navigator.canShare(data))) {
+    try {
+      await navigator.share(data);
+      return true;
+    } catch (err) {
+      if (err?.name === "AbortError") return false;
+      throw err;
+    }
+  }
+
+  // Non-iOS / older browser fallback: save the exact uploaded blob locally.
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = file.name;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return true;
+}
+
+function showNextPhotoSave() {
+  state.photoSave = state.photoSaveQueue.shift() || null;
+  state.modal = state.photoSave ? "photo-saved" : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -301,6 +342,16 @@ function modal() {
     body = `<h2>Couldn't read the card</h2>
       <p class="status">${esc(state.scan.message || "Something went wrong.")}</p>
       <div class="actions">${btn("Cancel", "cancel-scan", "ghost")}${btn("Retry", "retry-scan")}</div>`;
+  }
+  if (m === "photo-saved") {
+    body = `<h2>Photo uploaded successfully</h2>
+      <p class="status">Save this exact image to Apple Photos, share it, or review it first. Save to Photos opens the iOS Share Sheet—choose Save Image.</p>
+      <div class="stack">
+        ${btn("Save to Photos", "save-photo-to-library")}
+        ${btn("Share", "share-uploaded-photo", "secondary")}
+        ${btn("View Photo", "view-uploaded-photo", "secondary")}
+      </div>
+      <div class="actions">${btn("Close", "close-photo-save", "ghost")}</div>`;
   }
   if (m === "edit-card") {
     body = `<h2>Edit Card</h2><div class="stack">
@@ -573,6 +624,30 @@ async function handleAction(action, a) {
       $("#" + (action === "camera" ? "camera-input" : "photo-input")).click();
       break;
     case "remove-photo": await removePhoto(a); break;
+    case "save-photo-to-library": {
+      try {
+        const completed = await sharePhotoToIos(state.photoSave);
+        if (completed) {
+          showNextPhotoSave(); render();
+        }
+      } catch (err) { toast(err?.message || "Could not open the share sheet."); }
+      break;
+    }
+    case "share-uploaded-photo": {
+      try {
+        const completed = await sharePhotoToIos(state.photoSave);
+        if (completed) { showNextPhotoSave(); render(); }
+      } catch (err) { toast(err?.message || "Could not open the share sheet."); }
+      break;
+    }
+    case "view-uploaded-photo":
+      state.viewer = {
+        key: state.photoSave.meta.local_ref, storage: state.photoSave.meta.storage_path,
+        bucket: "photos", label: "Attached photo",
+      };
+      render(); break;
+    case "close-photo-save":
+      state.photoSave = null; state.photoSaveQueue = []; state.modal = null; render(); break;
 
     // --- meetings ---
     case "detect": await detect(); break;
@@ -819,14 +894,17 @@ function wireFileInputs() {
       // Day-entry / draft photos.
       state.busy = true; render();
       try {
+        const uploaded = [];
         for (const file of files.slice(0, 10)) {
           const meta = await storageApi.attachPhoto(file, { backup: true });
           const entryId = state.photoTarget?.startsWith("entry:") ? state.photoTarget.split(":")[1] : null;
           const row = await photos.add({ ...meta, day_entry_id: entryId });
           if (state.photoTarget === "draft") state.draft.photos.push(row);
+          uploaded.push({ blob: file, meta, index: uploaded.length + 1 });
         }
         if (state.photoTarget?.startsWith("entry:")) await refreshEntries();
-        toast(files.length === 1 ? "Photo attached" : "Photos attached");
+        state.photoSaveQueue = uploaded;
+        showNextPhotoSave();
       } catch (err) { toast(err.message); }
       finally { state.busy = false; state.photoTarget = null; render(); }
     });
