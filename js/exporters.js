@@ -57,14 +57,27 @@ function vcardEscape(s) {
   return String(s || "").replace(/([,;\\\n])/g, "\\$1");
 }
 
+// vCard N is ordered Family;Given;Additional;Prefix;Suffix. DayLog receives a
+// single display-name string, so preserve its first word as given name and all
+// remaining words as the family name (including multi-part family names).
+export function splitContactName(name) {
+  const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+  return {
+    givenName: parts[0] || "",
+    familyName: parts.slice(1).join(" "),
+  };
+}
+
 // contact: { name, company, job_title, phones[], office_phones[], emails[],
 //            website, address, notes }
 export function buildVCard(contact) {
+  const displayName = String(contact.name || "").trim() || "Unnamed contact";
+  const { givenName, familyName } = splitContactName(contact.name);
   const lines = [
     "BEGIN:VCARD",
     "VERSION:3.0",
-    `FN:${vcardEscape(contact.name || "Unnamed contact")}`,
-    `N:${vcardEscape(contact.name || "")};;;;`,
+    `FN:${vcardEscape(displayName)}`,
+    `N:${vcardEscape(familyName)};${vcardEscape(givenName)};;;`,
   ];
   if (contact.company) lines.push(`ORG:${vcardEscape(contact.company)}`);
   if (contact.job_title) lines.push(`TITLE:${vcardEscape(contact.job_title)}`);
