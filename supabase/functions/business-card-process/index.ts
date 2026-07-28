@@ -84,10 +84,67 @@ async function ocrSpace(base64: string, mime: string, debug: ScanDebug): Promise
 // --- Deterministic extraction ---------------------------------------------
 const JOB_WORDS = /manager|director|sales|engineer|consultant|founder|owner|ceo|cto|cfo|coo|officer|executive|head|lead|specialist|architect|designer|developer|president|partner|analyst|advisor|coordinator/i;
 const COMPANY_WORDS = /pvt|ltd|llp|inc|corp|solutions|technologies|systems|services|company|enterprises|studio|industries|consultants|group|agency|global|labs|limited|private|holdings|ventures|partners/i;
+const NON_PERSON_WORDS = /lighting|dealer|distributor|partner|electrical|electronics|solutions|services|technologies|systems|industries|trades|trading|premium|authorized|certified|logo|showroom|kitchen|spare|parts|crockery/i;
+const ADDRESS_WORDS = /road|street|avenue|lane|floor|block|sector|city|pin|zip|nagar|colony|building|suite|drive|blvd|near|opp|opposite/i;
+
+interface NameCandidate {
+  value: string;
+  source: "ocr" | "groq" | "groq-name-only";
+  line: number | null;
+  score: number;
+  accepted: boolean;
+  reasons: string[];
+}
+
+function normalizeName(value: string): string {
+  return value.replace(/^(?:mr|mrs|ms|dr|er)\.?\s+/i, "").replace(/\s+/g, " ").trim();
+}
+
+function nameCandidate(value: string, source: NameCandidate["source"], line: number | null, company: string, companyLine: number | null): NameCandidate {
+  const name = normalizeName(value);
+  const words = name.split(/\s+/).filter(Boolean);
+  const comparable = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+  const reasons: string[] = [];
+  if (!name) reasons.push("empty");
+  if (/\d|@|https?:|www\./i.test(name)) reasons.push("contains contact or numeric text");
+  if (!/^[\p{L}][\p{L}'’.-]*(?:\s+[\p{L}][\p{L}'’.-]*)*$/u.test(name)) reasons.push("contains non-name characters");
+  if (words.length < 2) reasons.push("fewer than two name words");
+  if (words.length > 4) reasons.push("more than four name words");
+  // A middle initial (e.g. "Sajuman K George") is a valid personal-name
+  // pattern; a leading/trailing one-letter fragment is not.
+  if (words.some((word, index) => word.length < 2 && !(words.length >= 3 && index > 0 && index < words.length - 1))) {
+    reasons.push("contains a one-letter fragment");
+  }
+  if (NON_PERSON_WORDS.test(name)) reasons.push("contains business, product, or partner language");
+  if (ADDRESS_WORDS.test(name)) reasons.push("looks like an address");
+  if (company && comparable(name) === comparable(company)) reasons.push("identical to company");
+
+  let score = 0;
+  if (words.length === 2) score += 42;
+  if (words.length === 3) score += 48;
+  if (words.length === 4) score += 40;
+  if (words.every((word) => word.length >= 2)) score += 8;
+  if (line != null && companyLine != null) score += Math.max(0, 14 - Math.abs(line - companyLine) * 3);
+  if (source !== "ocr") score += 18;
+  if (reasons.length) score = -100;
+  return { value: name, source, line, score, accepted: reasons.length === 0, reasons };
+}
+
+function selectName(text: string, company: string, proposed: Array<{ value: string; source: NameCandidate["source"] }> = []) {
+  const lines = text.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+  const companyLine = lines.findIndex((line) => line === company);
+  const candidates = [
+    ...lines.map((line, index) => nameCandidate(line, "ocr", index, company, companyLine >= 0 ? companyLine : null)),
+    ...proposed.map((item) => nameCandidate(item.value, item.source, null, company, companyLine >= 0 ? companyLine : null)),
+  ];
+  const accepted = candidates.filter((candidate) => candidate.accepted).sort((a, b) => b.score - a.score);
+  return { chosen: accepted[0] ?? null, candidates };
+}
 
 interface Extracted {
   contact: typeof EMPTY_CONTACT;
   confidence: number;
+  nameCandidates: NameCandidate[];
 }
 
 function deterministicExtract(text: string): Extracted {
@@ -103,10 +160,10 @@ function deterministicExtract(text: string): Extracted {
 
   const job_title = lines.find((l) => JOB_WORDS.test(l)) || "";
   const company = lines.find((l) => l !== job_title && COMPANY_WORDS.test(l)) || "";
-  const name = lines.find(
-    (l) => l !== job_title && l !== company &&
-      !/\d|@|www|http/i.test(l) && l.split(/\s+/).length <= 5,
-  ) || "";
+  // Name selection is intentionally separate from generic OCR-line parsing.
+  // A logo fragment must never become a name just because it appears first.
+  const selected = selectName(text, company);
+  const name = selected.chosen?.value || "";
   const address = lines
     .filter((l) => /road|street|avenue|lane|floor|block|sector|city|pin|zip|nagar|colony|building|suite|drive|blvd|\d{5,6}/i.test(l))
     .join(", ");
@@ -127,6 +184,7 @@ function deterministicExtract(text: string): Extracted {
       phone: phone || "", email: email || "", website: website || "", address,
     },
     confidence,
+    nameCandidates: selected.candidates,
   };
 }
 
@@ -164,8 +222,12 @@ async function groqStructure(text: string, debug: ScanDebug): Promise<typeof EMP
     "You extract contact details from raw OCR text of a business card. " +
     "Respond with ONLY a compact JSON object, no prose, no code fences. " +
     'Schema exactly: {"name":"","company":"","job_title":"","phone":"",' +
-    '"email":"","website":"","address":""}. Use empty strings for unknown ' +
-    "fields. Pick the single best phone and email.";
+    '"email":"","website":"","address":""}. Use empty strings for unknown fields. ' +
+    "The name must be the person's full human name, usually two to four alphabetic words. " +
+    "Strip Mr., Mrs., Ms., Dr., and Er. Ignore logos, brands, product names, awards, " +
+    "certifications, decorative text, taglines, sponsor logos, companies, and job titles. " +
+    "Never put a short logo fragment or dealer, distributor, partner, lighting, electrical, " +
+    "electronics, or product text in name. Pick the single best phone and email.";
 
   const requestBody = {
     model,
@@ -212,6 +274,37 @@ async function groqStructure(text: string, debug: ScanDebug): Promise<typeof EMP
   return contact;
 }
 
+// A deliberately narrow retry used only after every first-pass name candidate
+// fails validation. It cannot modify company/contact fields.
+async function groqNameOnly(text: string, debug: ScanDebug): Promise<string> {
+  const key = Deno.env.get("GROQ_API_KEY");
+  if (!key) return "";
+  const model = Deno.env.get("GROQ_MODEL") || DEFAULT_GROQ_MODEL;
+  const requestBody = {
+    model, temperature: 0, response_format: { type: "json_object" },
+    messages: [
+      { role: "system", content: "From this business-card OCR text, return ONLY JSON {\"name\":\"\"}. Return the person's full human name only. Ignore logos, brands, companies, job titles, product text, taglines, addresses, emails, and phones. Strip honorifics. If no reliable two-to-four-word personal name exists, return an empty string." },
+      { role: "user", content: text.slice(0, 4000) },
+    ],
+  };
+  debugLog("groq_name_only_request", { model, payload: requestBody }, debug);
+  const resp = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+    body: JSON.stringify(requestBody),
+  });
+  const data = await resp.json().catch(() => null);
+  debugLog("groq_name_only_response", { status: resp.status, payload: data }, debug);
+  const content = data?.choices?.[0]?.message?.content;
+  if (typeof content !== "string") return "";
+  try {
+    const cleaned = content.replace(/```json|```/g, "").trim();
+    const match = cleaned.match(/\{[\s\S]*\}/);
+    const parsed = JSON.parse(match ? match[0] : cleaned);
+    return typeof parsed?.name === "string" ? normalizeName(parsed.name) : "";
+  } catch { return ""; }
+}
+
 // --- Handler ---------------------------------------------------------------
 serve(async (request) => {
   if (request.method === "OPTIONS") return new Response("ok", { headers: CORS });
@@ -243,6 +336,7 @@ serve(async (request) => {
       debugLog("final_contact", final, debug);
       return json(DEBUG_SCAN ? { ...final, debug } : final);
     }
+    debugLog("raw_ocr_text", text, debug);
 
     // 2. Deterministic extraction + confidence.
     const det = deterministicExtract(text);
@@ -250,6 +344,7 @@ serve(async (request) => {
       email: det.contact.email, phone: det.contact.phone, website: det.contact.website,
       confidence: det.confidence, contact: det.contact,
     }, debug);
+    debugLog("name_candidates_initial", det.nameCandidates, debug);
 
     // 3. Low confidence -> Groq structuring (if available). Merge, preferring
     //    Groq for descriptive fields but keeping deterministic contact points
@@ -257,11 +352,15 @@ serve(async (request) => {
     let contact = det.contact;
     let source = `${ocrSource}+deterministic`;
     let confidence = det.confidence;
+    let groqProposedName = "";
 
     const HIGH = 0.75;
-    if (det.confidence < HIGH) {
+    // Contact-point confidence must not hide an untrusted person name. A valid
+    // name is a separate requirement from email/phone/website confidence.
+    if (det.confidence < HIGH || !det.contact.name) {
       const groq = await groqStructure(text, debug);
       if (groq) {
+        groqProposedName = groq.name;
         contact = {
           name: groq.name || det.contact.name,
           company: groq.company || det.contact.company,
@@ -275,6 +374,25 @@ serve(async (request) => {
         confidence = Math.max(det.confidence, 0.8);
       }
     }
+
+    // Rank raw OCR lines and any Groq proposal using the same rules. A model
+    // response is a candidate, not an authority over logos/brand fragments.
+    let reviewed = selectName(text, contact.company, groqProposedName
+      ? [{ value: groqProposedName, source: "groq" }]
+      : []);
+    debugLog("name_candidates_ranked", reviewed.candidates, debug);
+    debugLog("name_candidates_rejected", reviewed.candidates.filter((c) => !c.accepted), debug);
+    debugLog("name_candidate_chosen", reviewed.chosen, debug);
+
+    if (!reviewed.chosen) {
+      const retryName = await groqNameOnly(text, debug);
+      reviewed = selectName(text, contact.company, retryName
+        ? [{ value: retryName, source: "groq-name-only" }]
+        : []);
+      debugLog("name_candidates_second_pass", reviewed.candidates, debug);
+      debugLog("name_candidate_second_pass_chosen", reviewed.chosen, debug);
+    }
+    contact.name = reviewed.chosen?.value || "";
 
     const final = { ...contact, confidence, source, raw_text: text };
     debugLog("final_contact", final, debug);
