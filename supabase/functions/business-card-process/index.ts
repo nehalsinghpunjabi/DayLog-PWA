@@ -118,6 +118,11 @@ function nameCandidate(value: string, source: NameCandidate["source"], line: num
   if (NON_PERSON_WORDS.test(name)) reasons.push("contains business, product, or partner language");
   if (ADDRESS_WORDS.test(name)) reasons.push("looks like an address");
   if (company && comparable(name) === comparable(company)) reasons.push("identical to company");
+  const companyTokens = normalizeName(company).toLowerCase().match(/\p{L}+/gu) || [];
+  const nameTokens = name.toLowerCase().match(/\p{L}+/gu) || [];
+  if (companyTokens.length && nameTokens.length && nameTokens.every((word) => companyTokens.includes(word))) {
+    reasons.push("made entirely of company words");
+  }
 
   let score = 0;
   if (words.length === 2) score += 42;
@@ -357,7 +362,9 @@ serve(async (request) => {
     const HIGH = 0.75;
     // Contact-point confidence must not hide an untrusted person name. A valid
     // name is a separate requirement from email/phone/website confidence.
-    if (det.confidence < HIGH || !det.contact.name) {
+    const rawNameIsAllCaps = det.contact.name.length > 1 &&
+      det.contact.name === det.contact.name.toUpperCase() && det.contact.name !== det.contact.name.toLowerCase();
+    if (det.confidence < HIGH || !det.contact.name || rawNameIsAllCaps) {
       const groq = await groqStructure(text, debug);
       if (groq) {
         groqProposedName = groq.name;
