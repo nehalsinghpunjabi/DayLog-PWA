@@ -356,6 +356,8 @@ function contactsPanel() {
 
 function render() {
   document.body.dataset.theme = state.theme === "system" ? "" : state.theme;
+  // Keep the page behind a modal stationary; the modal itself owns vertical scrolling.
+  document.body.classList.toggle("modal-open", Boolean(state.modal));
 
   if (!state.ready) { app.innerHTML = `<div class="boot"><i class="spinner big"></i></div>`; return; }
   if (!state.session) { app.innerHTML = authScreen(); return; }
