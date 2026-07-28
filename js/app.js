@@ -181,7 +181,7 @@ function logScreen() {
   return `<main class="stack">
     <p class="greeting">${greeting()}</p>
     <div class="field"><label>Date</label>
-      <input class="input" id="date" type="date" value="${d.date}"></div>
+      <input class="input date-input" id="date" type="date" value="${d.date}"></div>
     <div class="field"><label>What you did today <span class="req">*</span></label>
       <textarea id="daily_notes" placeholder="Capture what mattered today…">${esc(d.daily_notes)}</textarea></div>
     <div class="field"><label>Meetings / future plans</label>
