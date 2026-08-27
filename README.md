@@ -4,6 +4,10 @@ An iPhone-first Progressive Web App that recreates the original DayLog Android
 app while adding cloud sync, multi-user accounts, infinite history, and global
 full-text search. Built with vanilla HTML/CSS/JavaScript on a Supabase backend.
 
+> A privacy-conscious daily log that works like a native iPhone app, with cloud sync when you need it and offline resilience when you do not.
+
+[**Open the live demo**](https://day-log-pwa.vercel.app) · [Architecture](docs/ARCHITECTURE.md) · [Setup guide](docs/SETUP.md)
+
 - **Frontend:** static HTML + CSS + ES-module JavaScript (no build step)
 - **Backend:** Supabase — Auth, Postgres, Storage, Edge Functions
 - **Source of truth:** Supabase. IndexedDB is a cache only.
